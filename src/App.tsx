@@ -42,62 +42,77 @@ export default function App() {
   const [notes, setNotes] = useState('');
   const [editingCourse, setEditingCourse] = useState<Course | null>(null);
 
-  // Generate next section number for a course code
-  const getNextSectionNumber = (courseCode: string): string => {
-    const existingSections = courses
+  // Generate the next section number for a specific course code
+  const getNextSectionNumber = (courseCode: string, existingCourses: Course[]): string => {
+    const existingSections = existingCourses
       .filter(c => c.code === courseCode && c.sectionNumber)
       .map(c => parseInt(c.sectionNumber || '0'))
-      .sort((a, b) => b - a);
-    
+      .sort((a, b) => b - a)
+      .filter(section => !Number.isNaN(section));
+
     const nextNumber = existingSections.length > 0 ? existingSections[0] + 1 : 1;
     return nextNumber.toString().padStart(2, '0');
   };
 
-  const handleDropCourse = (course: Course, day: DayOfWeek, time: string) => {
+  const createCourseInstance = (course: Course, day: DayOfWeek, time: string, existingCourses: Course[]): Course => {
     // Calculate end time (default 2 hour 50 min block - typical RIT class)
-    const startHour = parseInt(time.split(':')[0]);
-    const startMinute = parseInt(time.split(':')[1]);
-    const endHour = startHour + 2;
-    const endMinute = startMinute + 50;
+    const [startHour, startMinute] = time.split(':').map(Number);
+    let endHour = startHour + 2;
+    let endMinute = startMinute + 50;
+
+    if (endMinute >= 60) {
+      endHour += Math.floor(endMinute / 60);
+      endMinute = endMinute % 60;
+    }
+
     const endTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
-    
-    // Create a new course instance with unique section number
-    const sectionNumber = getNextSectionNumber(course.code);
-    const newInstance: Course = {
+    const sectionNumber = getNextSectionNumber(course.code, existingCourses);
+
+    const uniqueSuffix =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const sanitizedCode = course.code.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const instanceId = `${sanitizedCode}-${sectionNumber}-${uniqueSuffix}`;
+
+    return {
       ...course,
-      id: `${course.id}-${sectionNumber}`,
+      id: instanceId,
       sectionNumber,
       timeSlots: [{ day, startTime: time, endTime }],
       room: course.room === 'TBD' ? '07-1315' : course.room,
     };
+  };
 
+  const handleDropCourse = (course: Course, day: DayOfWeek, time: string) => {
+    const newInstance = createCourseInstance(course, day, time, courses);
     setEditingCourse(newInstance);
   };
 
   const handleSaveCourse = (updatedCourse: Course) => {
-    // Check if this is a new instance or updating an existing one
-    const existingIndex = courses.findIndex(c => c.id === updatedCourse.id);
-    if (existingIndex >= 0) {
-      // Update existing course
-      setCourses(courses.map(c => c.id === updatedCourse.id ? updatedCourse : c));
-    } else {
-      // Add new instance
-      setCourses([...courses, updatedCourse]);
-    }
+    setCourses(prevCourses => {
+      const existingIndex = prevCourses.findIndex(c => c.id === updatedCourse.id);
+      if (existingIndex >= 0) {
+        return prevCourses.map(c => (c.id === updatedCourse.id ? updatedCourse : c));
+      }
+      return [...prevCourses, updatedCourse];
+    });
   };
 
   const handleUnscheduleCourse = (course: Course) => {
-    // Remove the course instance entirely (only remove instances with section numbers)
-    if (course.sectionNumber) {
-      setCourses(courses.filter(c => c.id !== course.id));
-    } else {
-      // If it's a base course without section, just clear its time slots
+    setCourses(prevCourses => {
+      if (course.sectionNumber) {
+        return prevCourses.filter(c => c.id !== course.id);
+      }
+
       const updatedCourse: Course = {
         ...course,
         timeSlots: [],
       };
-      setCourses(courses.map(c => c.id === course.id ? updatedCourse : c));
-    }
+
+      return prevCourses.map(c => (c.id === course.id ? updatedCourse : c));
+    });
   };
 
   // Scheduled courses are those with section numbers OR those with time slots
